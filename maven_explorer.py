@@ -1,3 +1,12 @@
+## version 20190502
+    # fixed bug in ms2 fa tail dictionary mapping
+
+## version 20190320
+    # refined ms2 fragment clustering and aggregation into function
+
+## version 20190312
+    # changed naming of spectra files to include experiment conditions
+
 import pandas as pd
 import numpy as np
 from pyteomics import mgf, mzxml, mass
@@ -189,7 +198,11 @@ def intensity_topfrac(x, topfrac=topfrac):
     except:
         return
 
+## This function searches mdf for all clusters with specified m/z in range set by ppm  
+def mz_search(mz, mdf_mean_wide, ppm = 20):
 
+    return mdf_mean_wide.loc[(mdf_mean_wide['mean_medMz']>(mz-mz*ppm/1000000))&(mdf_mean_wide['mean_medMz']<(mz+mz*ppm/1000000))]
+    
 
  
 def apply_mdf(mdf, filtered_data):
@@ -235,7 +248,7 @@ def apply_mdf_melt(mdf, filtered_data):
 ## This function returns a CSV and spectra plot of ms2 data for a specified compound.
 ## Options include to limit fragments of specified relative intensity (spectensity), save files to output_dir,
 ## and return specific index or all spectra
-def spectra_plot_compound(df, compound, output_dir, index=0, spectensity=0.01, 
+def spectra_plot_compound(df, compound, base_name, output_dir, index=0, spectensity=0.01, 
                             compound_col='compound', save = False,
                             run_all = False):
 
@@ -291,7 +304,9 @@ def spectra_plot_compound(df, compound, output_dir, index=0, spectensity=0.01,
         compound = compound.replace(':', '-')
         compound = compound.replace('(', '-')
         compound = compound.replace(')', '')
-        spectra_name = 'compound_'+compound+'_index_'+str(index_loop)
+        spectra_name = compound+'_index_'+str(index_loop)+'_'+base_name
+        ## below will change non alphanumeric characters to _ in filename
+        spectra_name = "".join([x if x.isalnum() else "_" for x in spectra_name])
         print(spectra_name)
         if save == True:
             #fig.savefig(os.path.join(output_dir, spectra_name+'.pdf'), bbox_inches='tight')
@@ -366,81 +381,7 @@ def g(x):
                             spectra = x[x['spectra']>0].spectra.count()))
 
 
-## This function "breaks out" fragment data for compounds in a matrix containing mzarray_norm (filtered_data)
-## and aggregates according to m/z to form fragment clusters
-def aggregate_fragments(filtered_data):
-    df_frag2 = filtered_data[['compound', 'medRt', 'medMz', 'mzarray_norm']].copy()
-    df_frag2
 
-    rows = []
-    _ = df_frag2.apply(lambda row: [rows.append([row['compound'], row['medMz'], row['medRt'], nn]) 
-                             for nn in row.mzarray_norm[:,0]], axis=1)
-    df_new = pd.DataFrame(rows, columns=df_frag2.columns)#.set_index(['compound'])
-    df_new = df_new.sort_values(by = ['mzarray_norm']).reset_index(drop=True)
-    
-    X2 = df_new[['mzarray_norm']].values.tolist()
-
-    print(len(X2))
-    print(type(X2))
-
-    X3 = flatten_list(X2)
-
-    print("Minimum m/z val: "+str(np.round(min(X2), 4)))
-    print("Maximum m/z val: "+str(np.round(max(X2), 4)))
-
-    ## set indices to split along
-    #indices = [0, 100.055, 200.2, 300, 400.18, 500, 600, 700, 800, 900]
-    indices = [200, 300, 400, 500, 600, 700, 800, 900, 1000]
-    # generate list of sublists splitting m/z along set indices
-    # X4[0] = list of m/z with values from 0 to 100 
-    X4 = list(partition(X3, indices))
-
-    for i in range(len(X4)-1):
-        #while i < (len(X4)-1):
-        max_x = max(X4[i])
-        min_x = min(X4[i+1])
-        print(str(i)+'| delta_ppm = '+str(abs((max_x-min_x)/((max_x+min_x)/2)*float(1000000)))+' ('+str(max_x)+', '+str(min_x)+')')
-
-    y = np.array([np.expand_dims(np.array(xi),-1) for xi in X4])
-    max_clust=0
-    dataframe_list = []
-    for idx, subarray in enumerate(y):
-        
-        dist = ((max(subarray)-min(subarray))/2+min(subarray))*float(80/1000000)
-        Y = pdist(subarray, metric='euclidean')
-
-        Z = linkage(Y, 'ward')
-        #print(str(len(Z)))
-        
-        clusters = fcluster(Z, dist, criterion='distance')
-        ## the addition of max_clust here makes each cluster unique as loop progresses
-        clusters = np.array(list(map(lambda x:x+max_clust, clusters)))
-        #print(clusters)
-        max_clust = max(clusters)
-        
-        ### concatenate together the m/z values and the clusters and turn to dataframe (convert clusteres to "int")
-        x2 = np.vstack((subarray.flatten(), clusters))
-        x3 = pd.DataFrame(x2.transpose(), columns = ['medMz_2', 'mzclusters'])
-        x3['mzclusters'] = x3['mzclusters'].astype(int)
-        
-        ## through each iteration, append to "dataframe_list" and then make into full dataframe
-        dataframe_list.append(x3)
-        group_df = pd.concat(dataframe_list).reset_index(drop=True)
-        print(str(idx)+'| dist criterion:'+str(dist)+", unique clust="+str(len(np.unique(clusters)))+', total compounds='+str(len(subarray)))
-        
-    df2 = pd.concat([group_df['mzclusters'], df_new], axis=1, sort=False)
-        
-    df2['counts'] = df2.groupby(['mzclusters']).transform('count')
-    #plt.hist(df2.loc[df2['counts'] > 150]['mzarray_norm'], bins = 1000)
-    df2.loc[df2['counts'] > 100].groupby(['mzclusters'])['mzarray_norm', 'counts']\
-    .mean().sort_values(by='counts', ascending = False)\
-    .to_csv(os.path.join(data_out, base_name+'_fragment_frequency.csv'), index=False)
-
-
-def g(x):
-    return pd.Series(dict(mean_medMz = x['medMz'].mean(), 
-                           mean_Rt = x['medRt'].mean(),
-                            spectra = x[x['spectra']>0].spectra.count()))
 
 
 ## This function combines untargeted data from different replicates by hierarchical aggregation along m/z and RT 
@@ -541,8 +482,162 @@ def aggregate_mz(X, indices):
     
     return result
 
-## This function searches mdf for all clusters with specified m/z in range set by ppm  
-def mz_search(mz, mdf_mean_wide, ppm = 20):
+### MS2 fragment aggregation functions
 
-    return mdf_mean_wide.loc[(mdf_mean_wide['mean_medMz']>(mz-mz*ppm/1000000))&(mdf_mean_wide['mean_medMz']<(mz+mz*ppm/1000000))]
+def aggregate_ms2(filtered_data, indices = [200.01, 300, 400, 500, 600, 700, 800, 900, 1000, 1200, 1600], ppm_frag = 60):
+    #ppm_frag = 80
+    dataframe_list=[]
+    for name, group in filtered_data.groupby(['compound']):
+        new_df = group.reset_index().drop(columns=['index', 'mzarray']).reset_index()
+        #print(len(new_df))
+
+        dataframe_list.append(new_df)
+        group_df = pd.concat(dataframe_list).reset_index(drop=True)
+
+    group_df = group_df.rename(index=str, columns={"index": "spec_index"})
+    df_frag2 = group_df[['spec_index','compound', 'medMz', 'medRt', 'mzarray_norm', 'sample']].copy()
+    df_frag2
+
+    rows = []
+    _ = df_frag2.apply(lambda row: [rows.append([row['spec_index'], row['compound'], row['medMz'], row['medRt'], nn, row['sample']]) 
+                             for nn in row.mzarray_norm[:,0:2]], axis=1)
+    df_new = pd.DataFrame(rows, columns=df_frag2.columns)#.set_index(['compound'])
+
+    df_new['mz frag'] = df_new['mzarray_norm'].apply(lambda x: x[0])
+    df_new['intensity frag'] = df_new['mzarray_norm'].apply(lambda x: x[1])
+    df_new = df_new.sort_values(by = ['mz frag']).reset_index(drop=True).drop(labels = 'mzarray_norm', axis = 1)
+
+    print('fragment matrix length: '+str(len(df_new)))
     
+    X2 = df_new[['mz frag']].values.tolist()
+
+    X3 = flatten_list(X2)
+
+    print("Minimum m/z val: "+str(np.round(min(X2), 4)))
+    print("Maximum m/z val: "+str(np.round(max(X2), 4)))
+
+    ## set indices to split along
+    #indices = [0, 100.055, 200.2, 300, 400.18, 500, 600, 700, 800, 900]
+    #indices = [200, 300, 400, 500, 600, 700, 800, 900, 1000, 1200]
+    # generate list of sublists splitting m/z along set indices
+    # X4[0] = list of m/z with values from 0 to 100 
+    X4 = list(partition(X3, indices))
+
+    for i in range(len(X4)-1):
+        #while i < (len(X4)-1):
+        max_x = max(X4[i])
+        min_x = min(X4[i+1])
+        print(str(i)+'| delta_ppm = '+str(abs((max_x-min_x)/((max_x+min_x)/2)*float(1000000)))+' ('+str(max_x)+', '+str(min_x)+')')
+        
+    # check ppm differences among sublist splits (should be less than 5)
+    y = np.array([np.expand_dims(np.array(xi),-1) for xi in X4])
+    max_clust=0
+    dataframe_list = []
+    for idx, subarray in enumerate(y):
+        
+        dist = ((max(subarray)-min(subarray))/2+min(subarray))*float(ppm_frag/1000000)
+        Y = pdist(subarray, metric='euclidean')
+
+        Z = linkage(Y, 'ward')
+        #print(str(len(Z)))
+        
+        clusters = fcluster(Z, dist, criterion='distance')
+        ## the addition of max_clust here makes each cluster unique as loop progresses
+        clusters = np.array(list(map(lambda x:x+max_clust, clusters)))
+        #print(clusters)
+        max_clust = max(clusters)
+        
+        ### concatenate together the m/z values and the clusters and turn to dataframe (convert clusters to "int")
+        x2 = np.vstack((subarray.flatten(), clusters))
+        x3 = pd.DataFrame(x2.transpose(), columns = ['medMz_2', 'mzclusters'])
+        x3['mzclusters'] = x3['mzclusters'].astype(int)
+        
+        ## through each iteration, append to "dataframe_list" and then make into full dataframe
+        dataframe_list.append(x3)
+        group_df = pd.concat(dataframe_list).reset_index(drop=True)
+        print(str(idx)+'| dist criterion:'+str(dist)+", unique clust="+str(len(np.unique(clusters)))+', total compounds='+str(len(subarray)))
+
+    df2 = pd.concat([group_df['mzclusters'], df_new], axis=1, sort=False)
+    return df2
+
+def groupby_spectra(df2):
+    dataframe_list = []
+    for name, group in df2.groupby(['compound', 'spec_index']):
+        new_df = group.groupby(["mzclusters"]).agg({
+
+                           'compound': {'compound': 'first'},
+                            'spec_index': {'spec_index':'first'},
+                            'sample': {'sample':'first'},
+                           'medRt': {'medRt':'first'},
+                            'medMz': {'medMz':'first'}, 
+                            'mzclusters': {'fragment_cluster' : 'first'},
+                           'mz frag': 
+                                      {'frag_mw': 'mean', 'count': 'count'},
+                            'intensity frag': {'avg intensity': 'mean'}
+                                                            })
+        new_df.columns = new_df.columns.droplevel(0)
+        #print(new_df)
+        new_df = new_df.sort_values(by = 'count', ascending = False)
+        dataframe_list.append(new_df)
+        group_df_frag2 = pd.concat(dataframe_list).reset_index(drop=True)
+    return group_df_frag2
+        
+def groupby_ms2frag(df):
+    dataframe_list = []
+    for name, group in df.groupby(['compound']):
+        ## total spectra needs to be outside the fragment cluster aggregation
+        group['total'] = group['spec_index'].nunique()
+        #print(group)
+        new_df = group.groupby(["fragment_cluster"]).agg({
+
+                           'compound': {'compound': 'first'},
+                           'medRt': {'medRt':'first'},
+                            'medMz': {'medMz':'first'}, 
+                            'total' : {'total': 'first'},
+                            'fragment_cluster': {'fragment_cluster' : 'first'},
+                           'frag_mw': 
+                                      {'frag_mw': 'mean', 'count': 'count'},
+                            'avg intensity': {'avg intensity': 'mean'}
+                                                            })
+        new_df.columns = new_df.columns.droplevel(0)
+        #print(new_df)
+        new_df = new_df.sort_values(by = 'count', ascending = False)
+        dataframe_list.append(new_df)
+        df = pd.concat(dataframe_list).reset_index(drop=True)
+        
+
+    print(len(df))
+    df['rel freq'] = df['count']/df['total']
+    return df
+    
+def create_frag_dict(df2, file, ppm = 10):
+    cluster_mz = df2.groupby('mzclusters').mean()['mz frag']
+    #cluster_mz.get_loc((cluster_mz > 255.23)&(cluster_mz < 255.24))
+    #ppm = 10000
+    for index, row in file.iterrows():
+        mz = row['mz']
+        #print(mz)
+        name = row['name']
+        #print(name)
+
+        cluster_mz_x = cluster_mz[cluster_mz.between(mz-ppm/1000000*mz, mz+ppm/1000000*mz)]
+        
+        #print('cluster for '+name+' is: '+
+        if cluster_mz_x.empty:
+            continue
+        elif cluster_mz_x.size == 1: 
+
+            print('cluster for '+name+'(m/z = '+str(round(mz,4))+') is: '+str(cluster_mz_x.index[0])+\
+                 ', m/z = '+str(cluster_mz_x.values[0].round(4)))
+            file.iloc[index, 2] = cluster_mz_x.index[0].astype(int)
+            file.iloc[index, 3] = cluster_mz_x.values[0]
+        elif cluster_mz_x.size > 1:
+            print('multiple cluster values for '+name)
+            for i in range(cluster_mz_x.size):
+                    print(str(i)+" cluster "+\
+                          str(cluster_mz_x.index[i].astype(int))+\
+                         ", m/z is: "+str(cluster_mz_x.values[i].round(4)))
+
+    file = file.loc[file['mzclusters']>0]  
+    file_dict = dict(zip(file['mzclusters'], file['name']))
+    return file_dict
